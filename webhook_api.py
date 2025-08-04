@@ -21,7 +21,7 @@ XST = None
 
 # Symbol → Epic + Default Size Mapping
 SYMBOL_EPIC_MAP = {
-    "BTCUSD":     {"epic": "BTCUSD",     "size": 0.01},
+    "BTCUSD":     {"epic": "BTCUSD",     "size": 0.005},
     "GOLD":       {"epic": "GOLD",       "size": 0.5},
     "SILVER":     {"epic": "SILVER",     "size": 55},
     "COPPER":     {"epic": "COPPER",     "size": 450},
@@ -185,4 +185,5 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
