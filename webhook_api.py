@@ -80,9 +80,10 @@ async def handle_webhook(request: Request):
         except json.JSONDecodeError:
             raise HTTPException(status_code=422, detail="Invalid JSON")
 
-        symbol = data.get("symbol")
-        action = data.get("action")
-        stop_loss = data.get("stop_loss")  # optional
+        symbol      = data.get("symbol")
+        action      = data.get("action")
+        stop_loss   = data.get("stop_loss")    # optional
+        take_profit = data.get("take_profit")  # optional
         # size can override default
         if not symbol or not action:
             raise HTTPException(status_code=400, detail="Missing 'symbol' or 'action'")
@@ -92,8 +93,8 @@ async def handle_webhook(request: Request):
             raise HTTPException(status_code=400, detail=f"Invalid action: {action}")
 
         symbol_info = SYMBOL_EPIC_MAP[symbol]
-        epic = symbol_info["epic"]
-        size = float(data.get("size", symbol_info["size"]))
+        epic        = symbol_info["epic"]
+        size        = float(data.get("size", symbol_info["size"]))
 
         # ensure logged in
         if not CST or not XST:
@@ -101,7 +102,7 @@ async def handle_webhook(request: Request):
 
         # ENTRY: buy / sell
         if action in ["buy", "sell"]:
-            direction = "BUY" if action == "buy" else "SELL"
+            direction     = "BUY" if action == "buy" else "SELL"
             order_payload = {
                 "epic": epic,
                 "direction": direction,
@@ -112,6 +113,8 @@ async def handle_webhook(request: Request):
             }
             if stop_loss is not None:
                 order_payload["stopLevel"] = float(stop_loss)
+            if take_profit is not None:
+                order_payload["limitLevel"] = float(take_profit)
 
             log(f"📤 Sending entry order: {order_payload}")
             res = requests.post(
@@ -142,14 +145,14 @@ async def handle_webhook(request: Request):
         else:  # action == "close"
             log(f"🔄 Closing position(s) for {symbol}")
             positions = get_open_positions()
-            closed = []
+            closed    = []
             for pos in positions:
                 if pos.get("epic") == epic:
                     # Determine opposite direction to close
                     dir_ = pos.get("direction")  # "BUY" or "SELL"
                     close_direction = "SELL" if dir_ == "BUY" else "BUY"
-                    position_size = pos.get("size")
-                    close_payload = {
+                    position_size   = pos.get("size")
+                    close_payload   = {
                         "epic": epic,
                         "direction": close_direction,
                         "size": position_size,
@@ -185,6 +188,3 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
