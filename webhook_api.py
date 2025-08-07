@@ -21,16 +21,16 @@ XST = None
 
 # Symbol → Epic + Default Size Mapping
 SYMBOL_EPIC_MAP = {
-    "BTCUSD":     {"epic": "BTCUSD",     "size": 0.005},
-    "GOLD":       {"epic": "GOLD",       "size": 0.5},
-    "SILVER":     {"epic": "SILVER",     "size": 55},
-    "COPPER":     {"epic": "COPPER",     "size": 450},
-    "OIL_CRUDE":  {"epic": "OIL_CRUDE",  "size": 30},
-    "EU50":       {"epic": "EU50",       "size": 0.3},
-    "UK100":      {"epic": "UK100",      "size": 0.2},
-    "EURUSD":     {"epic": "EURUSD",     "size": 2000},
+    "DOGEUSD":     {"epic": "DOGEUSD",     "size": 2200},
+    "GOLD":       {"epic": "GOLD",       "size": 1.5},
+    "SILVER":     {"epic": "SILVER",     "size": 65},
+    "COPPER":     {"epic": "COPPER",     "size": 500},
+    "OIL_CRUDE":  {"epic": "OIL_CRUDE",  "size": 35},
+    "EU50":       {"epic": "EU50",       "size": 0.8},
+    "UK100":      {"epic": "UK100",      "size": 0.4},
+    "EURUSD":     {"epic": "EURUSD",     "size": 6000},
     "LRC":        {"epic": "LRC",        "size": 0.5},
-    "ETHUSD":     {"epic": "ETHUSD",     "size": 0.15}
+    "ETHUSD":     {"epic": "ETHUSD",     "size": 0.3}
     # Weitere hinzufügen nach Bedarf
 }
 
@@ -188,3 +188,4 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
