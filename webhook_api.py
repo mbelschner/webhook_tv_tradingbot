@@ -30,7 +30,8 @@ SYMBOL_EPIC_MAP = {
     "UK100":      {"epic": "UK100",      "size": 0.4},
     "EURUSD":     {"epic": "EURUSD",     "size": 6000},
     "LRC":        {"epic": "LRC",        "size": 0.5},
-    "ETHUSD":     {"epic": "ETHUSD",     "size": 0.3}
+    "ETHUSD":     {"epic": "ETHUSD",     "size": 0.3},
+    "PLATINUM":   {"epic": "PLATINUM",   "size": 1.1}
     # Weitere hinzufügen nach Bedarf
 }
 
@@ -188,4 +189,5 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
