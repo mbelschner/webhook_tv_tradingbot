@@ -197,4 +197,105 @@ async def handle_webhook(request: Request):
         if symbol not in SYMBOL_EPIC_MAP:
             raise HTTPException(400, f"Unknown symbol: {symbol}")
         if action not in ["buy","sell","close"]:
-            raise HTTPException
+            raise HTTPException(400, f"Invalid action: {action}")
+
+        if already_processed(signal_id):
+            log(f"🧊 Duplicate signal ignored (signal_id={signal_id})")
+            return {"status": "duplicate_ignored", "signal_id": signal_id}
+
+        epic = SYMBOL_EPIC_MAP[symbol]["epic"]
+        size = float(data.get("size", SYMBOL_EPIC_MAP[symbol]["size"]))
+
+        # Snapshot Position
+        pos = find_position(epic)  # None oder Dict
+
+        # ---- CLOSE ----
+        if action == "close" or intent == "close":
+            log(f"🔄 Close request for {symbol} (side={side})")
+            # Wähle passende Position (falls mehrere Märkte gleiche EPIC -> unlikely)
+            if not pos:
+                log("ℹ️ No open position; nothing to close.")
+                mark_processed(signal_id)
+                return {"status":"no_position_to_close"}  # kein Fehler
+
+            # Optional: side prüfen
+            if side == "long" and pos["direction"] != "BUY":
+                log("ℹ️ side=long aber offene Short-Pos -> nichts zu tun.")
+                mark_processed(signal_id)
+                return {"status":"mismatch_side_noop"}
+            if side == "short" and pos["direction"] != "SELL":
+                log("ℹ️ side=short aber offene Long-Pos -> nichts zu tun.")
+                mark_processed(signal_id)
+                return {"status":"mismatch_side_noop"}
+
+            # Bevorzugt DELETE per dealId
+            ok = False
+            if pos.get("dealId"):
+                ok = delete_position(pos["dealId"])
+
+            if not ok:
+                close_direction = "SELL" if pos["direction"] == "BUY" else "BUY"
+                payload = {"epic": epic, "direction": close_direction, "size": pos["size"],
+                           "orderType":"MARKET","currencyCode":"USD","forceOpen": False}
+                log(f"📤 Fallback close via counter-order: {payload}")
+                r2 = capital_request("POST", "/api/v1/positions", json_body=payload)
+                if r2.status_code != 200:
+                    log(f"❌ Close order error: {r2.text}")
+                    raise HTTPException(500, r2.text)
+
+            mark_processed(signal_id)
+            log("✅ Position closed.")
+            return {"status":"positions closed"}
+
+        # ---- OPEN / AMEND SL ----
+        dir_open_req = "BUY" if action == "buy" else "SELL"
+
+        if pos and pos["direction"] == dir_open_req:
+            log(f"ℹ️ Same-direction position already open: {pos}")
+            if need_sl_change(pos["stopLevel"], stop_loss, ref_price=pos["avg"]) or take_profit is not None:
+                amend_stop_limit(pos["dealId"], stop_loss, take_profit)
+                mark_processed(signal_id)
+                return {"status":"amended stop/limit", "dealId": pos["dealId"],
+                        "old_stop": pos["stopLevel"], "new_stop": stop_loss}
+            else:
+                log("🟰 No meaningful SL/TP change; ignoring entry.")
+                mark_processed(signal_id)
+                return {"status":"ignored (dup entry / no SL change)"}
+
+        if pos and pos["direction"] != dir_open_req:
+            log("↔️ Opposite position open; closing before open.")
+            # try DELETE
+            ok = False
+            if pos.get("dealId"):
+                ok = delete_position(pos["dealId"])
+            if not ok:
+                close_direction = "SELL" if pos["direction"] == "BUY" else "BUY"
+                r_close = capital_request("POST", "/api/v1/positions",
+                                          json_body={"epic":epic,"direction":close_direction,"size":pos["size"],
+                                                     "orderType":"MARKET","currencyCode":"USD","forceOpen": False})
+                if r_close.status_code != 200:
+                    log(f"❌ Close-before-open error: {r_close.text}")
+                    raise HTTPException(500, r_close.text)
+
+        entry_payload = {"epic":epic, "direction":dir_open_req, "size":size,
+                         "orderType":"MARKET", "currencyCode":"USD",
+                         "forceOpen": False}
+        if stop_loss is not None:  entry_payload["stopLevel"]  = float(stop_loss)
+        if take_profit is not None:entry_payload["limitLevel"] = float(take_profit)
+
+        log(f"📤 Sending entry order: {entry_payload}")
+        r_entry = capital_request("POST", "/api/v1/positions", json_body=entry_payload)
+        if r_entry.status_code != 200:
+            log(f"❌ Entry order error: {r_entry.text}")
+            raise HTTPException(500, r_entry.text)
+
+        mark_processed(signal_id)
+        log("✅ Entry order executed.")
+        return {"status":"entry executed", "details": entry_payload}
+
+    except HTTPException as he:
+        log(f"⚠️ HTTPException: {he.detail}")
+        raise
+    except Exception as e:
+        log(f"🔥 Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
