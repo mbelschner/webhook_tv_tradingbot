@@ -27,7 +27,7 @@ SYMBOL_EPIC_MAP = {
     "LRC":         {"epic": "LRC",         "size": 0.5},
     "ETHUSD":      {"epic": "ETHUSD",      "size": 0.12},
     "NATURALGAS":  {"epic": "NATURALGAS",  "size": 700},
-    "NVDA":        {"epic": "NVDA",        "size": 8}
+    "BTCEUR":        {"epic": "BTCEUR",        "size": 0.005}
 }
 
 SL_ABS_TICK = float(os.getenv("SL_ABS_TICK", "0"))      # fixer Tick (z. B. 0.01); 0 = aus
@@ -299,3 +299,4 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
