@@ -1,171 +1,176 @@
 from fastapi import FastAPI, Request, HTTPException
-import requests, os, json, datetime
+import requests
+import os
+import json
+import datetime
 from dotenv import load_dotenv
 from typing import Optional, Dict
 
+# Lädt Umgebungsvariablen aus der .env-Datei
 load_dotenv()
+
 app = FastAPI()
 
-API_KEY    = os.getenv("CC_API_KEY")
-IDENTIFIER = os.getenv("CC_IDENTIFIER")
-PASSWORD   = os.getenv("CC_PASSWORD")
-BASE_URL   = os.getenv("CC_BASE_URL")
+# --- API-Zugangsdaten und Konfiguration aus .env-Datei ---
+API_KEY         = os.getenv("CC_API_KEY")
+IDENTIFIER      = os.getenv("CC_IDENTIFIER")
+PASSWORD        = os.getenv("CC_PASSWORD")
+BASE_URL        = os.getenv("CC_BASE_URL", "https://api-capital.com") # Default-URL hinzugefügt
 
+# Globale Variablen für die Session-Tokens
 CST = None
 XST = None
 
-# ---- Konfiguration ----
+# --- Konfiguration der handelbaren Symbole ---
+# Hier werden TradingView-Symbolnamen auf die "epic"-Namen von Capital.com gemappt
+# und eine Standard-Positionsgröße definiert.
 SYMBOL_EPIC_MAP = {
-    "DOGEUSD":     {"epic": "DOGEUSD",     "size": 2200},
-    "GOLD":        {"epic": "GOLD",        "size": 1.7},
-    "SILVER":      {"epic": "SILVER",      "size": 70},
-    "COPPER":      {"epic": "COPPER",      "size": 550},
-    "OIL_CRUDE":   {"epic": "OIL_CRUDE",   "size": 45},
-    "EU50":        {"epic": "EU50",        "size": 0.8},
-    "UK100":       {"epic": "UK100",       "size": 0.4},
-    "EURUSD":      {"epic": "EURUSD",      "size": 7000},
-    "LRC":         {"epic": "LRC",         "size": 0.5},
-    "ETHUSD":      {"epic": "ETHUSD",      "size": 0.12},
-    "NATURALGAS":  {"epic": "NATURALGAS",  "size": 700},
-    "BTCEUR":        {"epic": "BTCEUR",        "size": 0.005}
+    "ETHUSD":     {"epic": "ETHUSD",       "size": 0.12},
+    "DOGEUSD":    {"epic": "DOGEUSD",      "size": 2200},
+    "GOLD":       {"epic": "GOLD",         "size": 1.7},
+    "SILVER":     {"epic": "SILVER",       "size": 70},
+    "COPPER":     {"epic": "COPPER",       "size": 550},
+    "OIL_CRUDE":  {"epic": "OIL_CRUDE",    "size": 45},
+    "EU50":       {"epic": "EU50",         "size": 0.8},
+    "UK100":      {"epic": "UK100",        "size": 0.4},
+    "EURUSD":     {"epic": "EURUSD",       "size": 7000},
+    "LRC":        {"epic": "LRC",          "size": 0.5},
+    "NATURALGAS": {"epic": "NATURALGAS",   "size": 700},
+    "BTCEUR":     {"epic": "BTCEUR",       "size": 0.005}
 }
 
-SL_ABS_TICK = float(os.getenv("SL_ABS_TICK", "0"))      # fixer Tick (z. B. 0.01); 0 = aus
-SL_PCT_MIN  = float(os.getenv("SL_PCT_MIN", "0.001"))   # 0.1% Mindeständerung
-
+# --- Konfiguration für Idempotenz (Vermeidung doppelter Signale) ---
 IDEMP_STORE = "processed_signals.json"
 IDEMP_TTL_DAYS = 2
 
-# ---- Utilities ----
-def log(msg:str):
+# ===============================
+#   UTILITIES & HELPER-FUNKTIONEN
+# ===============================
+
+def log(msg: str):
+    """Schreibt eine Log-Nachricht auf die Konsole und in eine Datei."""
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
     print(line)
-    with open("webhook_log.txt","a") as f: f.write(line+"\n")
+    try:
+        with open("webhook_log.txt", "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print(f"Error writing to log file: {e}")
 
 def login_to_capital():
+    """Meldet sich bei der Capital.com API an und holt neue Session-Tokens."""
     global CST, XST
     log("🔐 Logging in to Capital.com…")
-    r = requests.post(f"{BASE_URL}/api/v1/session",
-                      json={"identifier": IDENTIFIER, "password": PASSWORD},
-                      headers={"X-CAP-API-KEY": API_KEY}, timeout=15)
-    if r.status_code != 200:
-        raise RuntimeError(f"Login failed: {r.text}")
-    CST = r.headers.get("CST")
-    XST = r.headers.get("X-SECURITY-TOKEN")
-    log("✅ Login successful.")
+    try:
+        r = requests.post(
+            f"{BASE_URL}/api/v1/session",
+            json={"identifier": IDENTIFIER, "password": PASSWORD},
+            headers={"X-CAP-API-KEY": API_KEY},
+            timeout=15
+        )
+        r.raise_for_status()  # Wirft einen Fehler bei HTTP-Statuscodes 4xx/5xx
+        CST = r.headers.get("CST")
+        XST = r.headers.get("X-SECURITY-TOKEN")
+        if not CST or not XST:
+            raise RuntimeError("Login successful, but tokens not found in headers.")
+        log("✅ Login successful.")
+    except requests.RequestException as e:
+        log(f"❌ Login failed: {e}")
+        raise RuntimeError(f"Login failed: {e}") from e
 
-def capital_request(method: str, path: str, *, json_body=None, headers_extra=None, retry=True) -> requests.Response:
-    """Auth-Wrapper mit Auto-ReLogin & einmaligem Retry bei Token-Expiry."""
+def capital_request(method: str, path: str, *, json_body=None, retry=True) -> requests.Response:
+    """Wrapper für API-Anfragen mit automatischer Authentifizierung und Re-Login."""
     if not (CST and XST):
         login_to_capital()
+    
     url = f"{BASE_URL}{path}"
     headers = {"X-CAP-API-KEY": API_KEY, "CST": CST, "X-SECURITY-TOKEN": XST}
-    if json_body is not None:
+    if json_body:
         headers["Content-Type"] = "application/json"
-    if headers_extra:
-        headers.update(headers_extra)
 
     r = requests.request(method.upper(), url, headers=headers, json=json_body, timeout=20)
 
+    # Prüfen, ob ein Re-Login notwendig ist (abgelaufener Token)
     needs_relogin = (r.status_code == 401)
-    try:
-        j = r.json()
-        if isinstance(j, dict) and j.get("errorCode") in {"error.invalid.session.token", "error.security.account.token.invalid"}:
-            needs_relogin = True
-    except Exception:
-        pass
+    if not needs_relogin:
+        try:
+            j = r.json()
+            if isinstance(j, dict) and j.get("errorCode") in {"error.invalid.session.token", "error.security.account.token.invalid"}:
+                needs_relogin = True
+        except json.JSONDecodeError:
+            pass
 
     if needs_relogin and retry:
-        log("⚠️ Session invalid/expired → re-login, retry once")
+        log("⚠️ Session invalid/expired → re-login and retry once.")
         login_to_capital()
-        return capital_request(method, path, json_body=json_body, headers_extra=headers_extra, retry=False)
+        return capital_request(method, path, json_body=json_body, retry=False)
 
     return r
 
-def get_open_positions():
+def get_open_positions() -> list:
+    """Ruft alle offenen Positionen vom Broker ab."""
     r = capital_request("GET", "/api/v1/positions")
     if r.status_code != 200:
-        raise RuntimeError(f"Fetch positions failed: {r.text}")
+        log(f"❌ Fetch positions failed: {r.text}")
+        return []
     return r.json().get("positions", [])
 
-def parse_pos(p: Dict):
-    # Capital kann verschachtelt liefern
-    deal_id = p.get("dealId") or p.get("position", {}).get("dealId")
-    epic    = p.get("epic")   or p.get("market", {}).get("epic") or p.get("position",{}).get("epic")
-    size    = p.get("size")   or p.get("position", {}).get("size")
-    dir_    = p.get("direction") or p.get("position", {}).get("direction")  # "BUY"/"SELL"
-    sl      = p.get("stopLevel") or p.get("position", {}).get("stopLevel")
-    avg     = (p.get("level") or p.get("position", {}).get("level")
-               or p.get("position", {}).get("openLevel"))
-    return {"dealId": deal_id, "epic": epic, "size": float(size) if size else 0.0,
-            "direction": dir_, "stopLevel": float(sl) if sl else None,
-            "avg": float(avg) if avg else None}
+def parse_pos(p: Dict) -> Dict:
+    """Vereinheitlicht das Positions-Objekt, da die API es manchmal verschachtelt zurückgibt."""
+    pos_data = p.get("position", {})
+    market_data = p.get("market", {})
+    return {
+        "dealId": p.get("dealId") or pos_data.get("dealId"),
+        "epic": p.get("epic") or market_data.get("epic") or pos_data.get("epic"),
+        "size": float(p.get("size") or pos_data.get("size") or 0.0),
+        "direction": p.get("direction") or pos_data.get("direction"), # "BUY" / "SELL"
+        "stopLevel": float(sl) if (sl := p.get("stopLevel") or pos_data.get("stopLevel")) else None,
+        "avg": float(avg) if (avg := p.get("level") or pos_data.get("level") or pos_data.get("openLevel")) else None
+    }
 
-def find_position(epic:str) -> Optional[Dict]:
+def find_position(epic: str) -> Optional[Dict]:
+    """Sucht eine offene Position anhand ihres Epic-Namens."""
     for p in get_open_positions():
         pp = parse_pos(p)
         if pp["epic"] == epic:
             return pp
     return None
 
-def need_sl_change(current_sl, new_sl, ref_price):
-    if new_sl is None: return False
-    if current_sl is None: return True
-    abs_diff = abs(float(current_sl) - float(new_sl))
-    if SL_ABS_TICK > 0 and abs_diff >= SL_ABS_TICK:
-        return True
-    pct_diff = abs_diff / float(ref_price) if ref_price else 0.0
-    return pct_diff >= SL_PCT_MIN
-
-def amend_stop_limit(deal_id: str, new_sl: float = None, new_tp: float = None):
-    payload = {}
-    if new_sl is not None: payload["stopLevel"]  = float(new_sl)
-    if new_tp is not None: payload["limitLevel"] = float(new_tp)
-    if not payload:
-        return
-    log(f"🛠️ Amending position {deal_id} -> {payload}")
-    r = capital_request("PUT", f"/api/v1/positions/otc/{deal_id}", json_body=payload)
-    if r.status_code not in (200, 201):
-        log(f"❌ Amend failed ({r.status_code}). Fallback text: {r.text}")
-        raise HTTPException(status_code=500, detail=r.text)
-    log("✅ Stop/Limit amended.")
-
-def delete_position(deal_id: str):
-    log(f"🗑️ DELETE position {deal_id}")
+def delete_position(deal_id: str) -> bool:
+    """Schließt eine Position vollständig über ihre dealId."""
+    log(f"🗑️ Deleting position {deal_id} via DELETE request.")
     r = capital_request("DELETE", f"/api/v1/positions/otc/{deal_id}")
     if r.status_code in (200, 204):
-        log("✅ Position deleted.")
+        log("✅ Position deleted successfully.")
         return True
     log(f"⚠️ DELETE failed ({r.status_code}). Text: {r.text}")
     return False
 
-# ---- Idempotenz: signal_id Cache ----
+# --- Idempotenz-Funktionen ---
 def _load_ids() -> Dict[str, str]:
     try:
-        with open(IDEMP_STORE, "r") as f: data = json.load(f)
-    except Exception:
+        with open(IDEMP_STORE, "r") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
         data = {}
-    # prune old
+    
     now = datetime.datetime.utcnow()
-    keep = {}
-    for k, iso in data.items():
-        try:
-            t = datetime.datetime.fromisoformat(iso)
-            if (now - t).days <= IDEMP_TTL_DAYS: keep[k] = iso
-        except Exception:
-            pass
-    if keep != data:
-        with open(IDEMP_STORE, "w") as f: json.dump(keep, f)
-    return keep
+    pruned_data = {
+        k: iso for k, iso in data.items()
+        if (now - datetime.datetime.fromisoformat(iso)).days <= IDEMP_TTL_DAYS
+    }
+    if len(pruned_data) != len(data):
+        _save_ids(pruned_data)
+    return pruned_data
 
-def _save_ids(data: Dict[str,str]):
-    with open(IDEMP_STORE, "w") as f: json.dump(data, f)
+def _save_ids(data: Dict[str, str]):
+    with open(IDEMP_STORE, "w") as f:
+        json.dump(data, f, indent=2)
 
 def already_processed(signal_id: Optional[str]) -> bool:
     if not signal_id: return False
-    data = _load_ids()
-    return signal_id in data
+    return signal_id in _load_ids()
 
 def mark_processed(signal_id: Optional[str]):
     if not signal_id: return
@@ -173,130 +178,130 @@ def mark_processed(signal_id: Optional[str]):
     data[signal_id] = datetime.datetime.utcnow().isoformat()
     _save_ids(data)
 
-# ---- Webhook ----
+# ===============================
+#   FASTAPI WEBHOOK ENDPUNKT
+# ===============================
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     try:
-        raw = await request.body()
-        log(f"📥 Raw payload: {raw}")
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=422, detail="Invalid JSON")
+        data = await request.json()
+        log(f"📥 Received payload: {data}")
 
-        symbol      = data.get("symbol")
-        action      = data.get("action")     # "buy"|"sell"|"close"
-        intent      = data.get("intent")     # optional
-        side        = data.get("side")       # optional: "long"|"short" (nur bei close nützlich)
-        stop_loss   = data.get("stop_loss")  # optional
-        take_profit = data.get("take_profit")# optional
-        signal_id   = data.get("signal_id")  # optional für Idempotenz
+        # --- Daten aus dem Alert auslesen ---
+        symbol = data.get("symbol")
+        action = data.get("action")
+        intent = data.get("intent")
+        signal_id = data.get("signal_id")
+        stop_loss = data.get("stop_loss")
+        close_percent = data.get("close_percent") # NEUER PARAMETER für partielle Exits
 
+        # --- Validierung der Eingabedaten ---
         if not symbol or not action:
             raise HTTPException(400, "Missing 'symbol' or 'action'")
         if symbol not in SYMBOL_EPIC_MAP:
             raise HTTPException(400, f"Unknown symbol: {symbol}")
-        if action not in ["buy","sell","close"]:
-            raise HTTPException(400, f"Invalid action: {action}")
+        if action not in ["buy", "sell"]:
+            action = "close" # Wenn 'action' 'close' ist, behandeln wir es als Schließung
 
         if already_processed(signal_id):
             log(f"🧊 Duplicate signal ignored (signal_id={signal_id})")
             return {"status": "duplicate_ignored", "signal_id": signal_id}
 
         epic = SYMBOL_EPIC_MAP[symbol]["epic"]
-        size = float(data.get("size", SYMBOL_EPIC_MAP[symbol]["size"]))
+        pos = find_position(epic)
 
-        # Snapshot Position
-        pos = find_position(epic)  # None oder Dict
-
-        # ---- CLOSE ----
-        if action == "close" or intent == "close":
-            log(f"🔄 Close request for {symbol} (side={side})")
-            # Wähle passende Position (falls mehrere Märkte gleiche EPIC -> unlikely)
+        # ==========================
+        #   LOGIK ZUM SCHLIESSEN
+        # ==========================
+        if intent == "close":
             if not pos:
-                log("ℹ️ No open position; nothing to close.")
+                log("ℹ️ No open position found; nothing to close.")
                 mark_processed(signal_id)
-                return {"status":"no_position_to_close"}  # kein Fehler
+                return {"status": "no_position_to_close"}
 
-            # Optional: side prüfen
-            if side == "long" and pos["direction"] != "BUY":
-                log("ℹ️ side=long aber offene Short-Pos -> nichts zu tun.")
-                mark_processed(signal_id)
-                return {"status":"mismatch_side_noop"}
-            if side == "short" and pos["direction"] != "SELL":
-                log("ℹ️ side=short aber offene Long-Pos -> nichts zu tun.")
-                mark_processed(signal_id)
-                return {"status":"mismatch_side_noop"}
+            # --- NEU: Logik für partielle vs. volle Schließung ---
+            is_partial_close = False
+            if close_percent:
+                try:
+                    cp = float(close_percent)
+                    if 0 < cp < 100:
+                        is_partial_close = True
+                except (ValueError, TypeError):
+                    log(f"⚠️ Invalid close_percent value ignored: {close_percent}")
 
-            # Bevorzugt DELETE per dealId
-            ok = False
-            if pos.get("dealId"):
-                ok = delete_position(pos["dealId"])
-
-            if not ok:
+            if is_partial_close:
+                # --- PARTIELLE SCHLIESSUNG ---
+                size_to_close = pos["size"] * (cp / 100.0)
+                # Auf eine für den Broker sinnvolle Anzahl von Nachkommastellen runden
+                size_to_close = round(size_to_close, 8)
+                
                 close_direction = "SELL" if pos["direction"] == "BUY" else "BUY"
-                payload = {"epic": epic, "direction": close_direction, "size": pos["size"],
-                           "orderType":"MARKET","currencyCode":"USD","forceOpen": False}
-                log(f"📤 Fallback close via counter-order: {payload}")
-                r2 = capital_request("POST", "/api/v1/positions", json_body=payload)
-                if r2.status_code != 200:
-                    log(f"❌ Close order error: {r2.text}")
-                    raise HTTPException(500, r2.text)
+                
+                payload = {
+                    "epic": epic, 
+                    "direction": close_direction, 
+                    "size": size_to_close,
+                    "orderType": "MARKET",
+                    "forceOpen": False  # WICHTIG: Reduziert die Position, anstatt eine neue zu eröffnen
+                }
+                log(f"📤 Sending partial close order: {payload}")
+                r_close = capital_request("POST", "/api/v1/positions/otc", json_body=payload)
+                
+                if r_close.status_code not in (200, 201):
+                    log(f"❌ Partial close order error: {r_close.text}")
+                    raise HTTPException(500, detail=f"Partial close failed: {r_close.text}")
+                
+                log(f"✅ Partial close executed for {cp}% of position.")
+                mark_processed(signal_id)
+                return {"status": "partial_close_executed", "details": payload}
+            
+            else:
+                # --- VOLLSTÄNDIGE SCHLIESSUNG (deine bisherige Logik) ---
+                log(f"Executing full close for position {pos.get('dealId')}.")
+                if not delete_position(pos["dealId"]):
+                     raise HTTPException(500, detail="Full close via DELETE failed.")
+                
+                mark_processed(signal_id)
+                return {"status": "positions_closed_fully"}
+
+        # ==========================
+        #   LOGIK ZUM ÖFFNEN
+        # ==========================
+        elif intent == "open":
+            if pos:
+                log(f"ℹ️ Position already exists for {epic}. Ignoring open signal.")
+                mark_processed(signal_id)
+                return {"status": "ignored_position_exists"}
+
+            entry_payload = {
+                "epic": epic,
+                "direction": "BUY" if action == "buy" else "SELL",
+                "size": SYMBOL_EPIC_MAP[symbol]["size"],
+                "orderType": "MARKET",
+                "forceOpen": True,
+                "guaranteedStop": False
+            }
+            if stop_loss:
+                entry_payload["stopLevel"] = float(stop_loss)
+
+            log(f"📤 Sending entry order: {entry_payload}")
+            r_entry = capital_request("POST", "/api/v1/positions/otc", json_body=entry_payload)
+            
+            if r_entry.status_code not in (200, 201):
+                log(f"❌ Entry order error: {r_entry.text}")
+                raise HTTPException(500, detail=f"Entry failed: {r_entry.text}")
 
             mark_processed(signal_id)
-            log("✅ Position closed.")
-            return {"status":"positions closed"}
+            log("✅ Entry order executed.")
+            return {"status": "entry_executed", "details": entry_payload}
 
-        # ---- OPEN / AMEND SL ----
-        dir_open_req = "BUY" if action == "buy" else "SELL"
-
-        if pos and pos["direction"] == dir_open_req:
-            log(f"ℹ️ Same-direction position already open: {pos}")
-            if need_sl_change(pos["stopLevel"], stop_loss, ref_price=pos["avg"]) or take_profit is not None:
-                amend_stop_limit(pos["dealId"], stop_loss, take_profit)
-                mark_processed(signal_id)
-                return {"status":"amended stop/limit", "dealId": pos["dealId"],
-                        "old_stop": pos["stopLevel"], "new_stop": stop_loss}
-            else:
-                log("🟰 No meaningful SL/TP change; ignoring entry.")
-                mark_processed(signal_id)
-                return {"status":"ignored (dup entry / no SL change)"}
-
-        if pos and pos["direction"] != dir_open_req:
-            log("↔️ Opposite position open; closing before open.")
-            # try DELETE
-            ok = False
-            if pos.get("dealId"):
-                ok = delete_position(pos["dealId"])
-            if not ok:
-                close_direction = "SELL" if pos["direction"] == "BUY" else "BUY"
-                r_close = capital_request("POST", "/api/v1/positions",
-                                          json_body={"epic":epic,"direction":close_direction,"size":pos["size"],
-                                                     "orderType":"MARKET","currencyCode":"USD","forceOpen": False})
-                if r_close.status_code != 200:
-                    log(f"❌ Close-before-open error: {r_close.text}")
-                    raise HTTPException(500, r_close.text)
-
-        entry_payload = {"epic":epic, "direction":dir_open_req, "size":size,
-                         "orderType":"MARKET", "currencyCode":"USD",
-                         "forceOpen": False}
-        if stop_loss is not None:  entry_payload["stopLevel"]  = float(stop_loss)
-        if take_profit is not None:entry_payload["limitLevel"] = float(take_profit)
-
-        log(f"📤 Sending entry order: {entry_payload}")
-        r_entry = capital_request("POST", "/api/v1/positions", json_body=entry_payload)
-        if r_entry.status_code != 200:
-            log(f"❌ Entry order error: {r_entry.text}")
-            raise HTTPException(500, r_entry.text)
-
-        mark_processed(signal_id)
-        log("✅ Entry order executed.")
-        return {"status":"entry executed", "details": entry_payload}
+        else:
+            log(f"⚠️ Unknown intent: {intent}. Ignoring.")
+            return {"status": "unknown_intent", "intent": intent}
 
     except HTTPException as he:
-        log(f"⚠️ HTTPException: {he.detail}")
-        raise
+        log(f"HTTP Exception: {he.status_code} - {he.detail}")
+        raise he
     except Exception as e:
-        log(f"🔥 Unexpected error: {e}")
+        log(f"🔥 UNEXPECTED SERVER ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
