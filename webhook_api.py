@@ -6,10 +6,10 @@ from typing import Optional, Dict
 load_dotenv()
 app = FastAPI()
 
-API_KEY    = os.getenv("CC_API_KEY")
-IDENTIFIER = os.getenv("CC_IDENTIFIER")
-PASSWORD   = os.getenv("CC_PASSWORD")
-BASE_URL   = os.getenv("CC_BASE_URL", "https://api-capital.com")
+API_KEY     = os.getenv("CC_API_KEY")
+IDENTIFIER  = os.getenv("CC_IDENTIFIER")
+PASSWORD    = os.getenv("CC_PASSWORD")
+BASE_URL    = os.getenv("CC_BASE_URL", "https://api-capital.com")
 
 CST = None
 XST = None
@@ -100,7 +100,7 @@ def parse_pos(p: Dict) -> Dict:
         "dealId": p.get("dealId") or pos_data.get("dealId"),
         "epic": p.get("epic") or market_data.get("epic") or pos_data.get("epic"),
         "size": float(p.get("size") or pos_data.get("size") or 0.0),
-        "direction": direction,  # BUY/SELL
+        "direction": direction,
         "stopLevel": float(sl) if (sl := p.get("stopLevel") or pos_data.get("stopLevel")) else None,
         "avg": float(avg) if (avg := p.get("level") or pos_data.get("level") or pos_data.get("openLevel")) else None
     }
@@ -121,23 +121,17 @@ def delete_position(deal_id: str) -> bool:
     log(f"⚠️ DELETE failed ({r.status_code}). Text: {r.text}")
     return False
 
-# --- idempotency ---
 def _load_ids() -> Dict[str, str]:
     try:
-        with open(IDEMP_STORE, "r") as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        data = {}
+        with open(IDEMP_STORE, "r") as f: data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError): data = {}
     now = datetime.datetime.utcnow()
-    pruned = {k: iso for k, iso in data.items()
-              if (now - datetime.datetime.fromisoformat(iso)).days <= IDEMP_TTL_DAYS}
-    if len(pruned) != len(data):
-        _save_ids(pruned)
+    pruned = {k: iso for k, iso in data.items() if (now - datetime.datetime.fromisoformat(iso)).days <= IDEMP_TTL_DAYS}
+    if len(pruned) != len(data): _save_ids(pruned)
     return pruned
 
-def _save_ids(data: Dict[str, str]): 
-    with open(IDEMP_STORE, "w") as f:
-        json.dump(data, f, indent=2)
+def _save_ids(data: Dict[str, str]):
+    with open(IDEMP_STORE, "w") as f: json.dump(data, f, indent=2)
 
 def already_processed(signal_id: Optional[str]) -> bool:
     return bool(signal_id) and signal_id in _load_ids()
@@ -148,20 +142,10 @@ def mark_processed(signal_id: Optional[str]):
     data[signal_id] = datetime.datetime.utcnow().isoformat()
     _save_ids(data)
 
-# ---- helper to place order (open / reduce) ----
 def place_order(epic: str, direction: str, size: float, *, force_open: bool, stop_level: Optional[float]=None):
-    payload = {
-        "epic": epic,
-        "direction": direction.upper(),      # BUY / SELL
-        "size": float(size),
-        "orderType": "MARKET",
-        "forceOpen": bool(force_open),
-        "guaranteedStop": False
-    }
-    if stop_level is not None:
-        payload["stopLevel"] = float(stop_level)
+    payload = { "epic": epic, "direction": direction.upper(), "size": float(size), "orderType": "MARKET", "forceOpen": bool(force_open), "guaranteedStop": False }
+    if stop_level is not None: payload["stopLevel"] = float(stop_level)
     log(f"📤 Sending order: {payload}")
-    # ✅ Capital.com uses POST /api/v1/positions
     r = capital_request("POST", "/api/v1/positions", json_body=payload)
     return r
 
@@ -174,12 +158,12 @@ async def handle_webhook(request: Request):
         data = await request.json()
         log(f"📥 Received payload: {data}")
 
-        symbol       = data.get("symbol")
-        action       = (data.get("action") or "").lower()    # "buy" | "sell" | (ignored)
-        intent       = (data.get("intent") or "").lower()    # "open" | "close"
-        signal_id    = data.get("signal_id")
-        stop_loss    = data.get("stop_loss")
-        close_percent_raw = data.get("close_percent")
+        symbol      = data.get("symbol")
+        action      = (data.get("action") or "").lower()      # "buy" | "sell"
+        intent      = (data.get("intent") or "").lower()      # "open" | "close" | "close_partial"
+        signal_id   = data.get("signal_id")
+        stop_loss   = data.get("stop_loss")
+        size_ratio_raw = data.get("size") # KORREKTUR: Lese das 'size' Feld, nicht 'close_percent'
 
         if not symbol or not intent:
             raise HTTPException(400, "Missing 'symbol' or 'intent'")
@@ -193,41 +177,42 @@ async def handle_webhook(request: Request):
         epic = SYMBOL_EPIC_MAP[symbol]["epic"]
         pos  = find_position(epic)
 
-        # ---------- CLOSE ----------
-        if intent == "close":
+        # KORREKTUR: Fasse "close" und "close_partial" zusammen
+        if intent in ("close", "close_partial"):
             if not pos:
                 log("ℹ️ No open position; nothing to close.")
                 mark_processed(signal_id)
                 return {"status": "no_position_to_close"}
 
-            # Partial?
+            # Prüfe, ob es ein Partial Close ist
             is_partial = False
-            cp = None
-            if close_percent_raw is not None:
+            size_ratio = 0.0
+            if intent == "close_partial" and size_ratio_raw is not None:
                 try:
-                    cp = float(close_percent_raw)
-                    is_partial = 0 < cp < 100
+                    # KORREKTUR: "size" ist ein Verhältnis (z.B. 0.5), kein Prozentsatz
+                    size_ratio = float(size_ratio_raw)
+                    is_partial = 0 < size_ratio < 1
                 except (TypeError, ValueError):
-                    log(f"⚠️ Invalid close_percent ignored: {close_percent_raw}")
+                    log(f"⚠️ Invalid size for partial close ignored: {size_ratio_raw}")
 
             if is_partial:
-                size_to_close = round(pos["size"] * (cp / 100.0), 8)
+                # KORREKTUR: Multipliziere direkt mit dem Verhältnis
+                size_to_close = round(pos["size"] * size_ratio, 8)
                 close_dir = "SELL" if pos["direction"] == "BUY" else "BUY"
                 r = place_order(epic, close_dir, size_to_close, force_open=False)
                 if r.status_code not in (200, 201):
                     log(f"❌ Partial close order error: {r.text}")
                     raise HTTPException(500, f"Partial close failed: {r.text}")
-                log(f"✅ Partial close executed for {cp}% of position.")
+                log(f"✅ Partial close executed for {size_ratio*100}% of position.")
                 mark_processed(signal_id)
-                return {"status": "partial_close_executed", "percent": cp, "size_closed": size_to_close}
-
-            # Full close
+                return {"status": "partial_close_executed", "ratio": size_ratio, "size_closed": size_to_close}
+            
+            # Wenn kein 'is_partial', handle es als Full Close
             if not delete_position(pos["dealId"]):
                 raise HTTPException(500, "Full close via DELETE failed.")
             mark_processed(signal_id)
             return {"status": "positions_closed_fully"}
 
-        # ---------- OPEN ----------
         elif intent == "open":
             if action not in ("buy", "sell"):
                 raise HTTPException(400, "For 'open' you must provide action 'buy' or 'sell'")
@@ -237,13 +222,7 @@ async def handle_webhook(request: Request):
                 return {"status": "ignored_position_exists"}
 
             size = SYMBOL_EPIC_MAP[symbol]["size"]
-            r = place_order(
-                epic,
-                "BUY" if action == "buy" else "SELL",
-                size,
-                force_open=True,
-                stop_level=float(stop_loss) if stop_loss is not None else None
-            )
+            r = place_order(epic, "BUY" if action == "buy" else "SELL", size, force_open=True, stop_level=float(stop_loss) if stop_loss is not None else None)
             if r.status_code not in (200, 201):
                 log(f"❌ Entry order error: {r.text}")
                 raise HTTPException(500, f"Entry failed: {r.text}")
