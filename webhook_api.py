@@ -17,16 +17,15 @@ XST = None
 SYMBOL_EPIC_MAP = {
     "ETHUSD":     {"epic": "ETHUSD",     "size": 0.12},
     "DOGEUSD":    {"epic": "DOGEUSD",    "size": 2200},
-    "GOLD":       {"epic": "GOLD",       "size": 1.7},
+    "GOLD":       {"epic": "GOLD",       "size": 1.6},
     "SILVER":     {"epic": "SILVER",     "size": 70},
     "COPPER":     {"epic": "COPPER",     "size": 550},
-    "OIL_CRUDE":  {"epic": "OIL_CRUDE",  "size": 45},
-    "EU50":       {"epic": "EU50",       "size": 0.8},
-    "UK100":      {"epic": "UK100",      "size": 0.4},
+    "OIL_CRUDE":  {"epic": "OIL_CRUDE",  "size": 44},
     "EURUSD":     {"epic": "EURUSD",     "size": 7000},
-    "LRC":        {"epic": "LRC",        "size": 0.5},
+    "LRC":        {"epic": "LRC",        "size": 0.4},
     "NATURALGAS": {"epic": "NATURALGAS", "size": 700},
-    "BTCEUR":     {"epic": "BTCEUR",     "size": 0.005},
+    "BTCEUR":     {"epic": "BTCEUR",     "size": 0.004},
+    "BTCUSD":     {"epic": "BTCUSD",     "size": 0.004}
 }
 
 IDEMP_STORE = "processed_signals.json"
@@ -241,3 +240,4 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 UNEXPECTED SERVER ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
