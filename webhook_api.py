@@ -22,8 +22,8 @@ SYMBOL_EPIC_MAP = {
     "COPPER":     {"epic": "COPPER",     "size": 550},
     "OIL_CRUDE":  {"epic": "OIL_CRUDE",  "size": 44},
     "EURUSD":     {"epic": "EURUSD",     "size": 7000},
-    "LRC":        {"epic": "LRC",        "size": 0.4},
-    "NATURALGAS": {"epic": "NATURALGAS", "size": 700},
+    "LRC":        {"epic": "LRC",        "size": 0.2},
+    "NATURALGAS": {"epic": "NATURALGAS", "size": 400},
     "BTCEUR":     {"epic": "BTCEUR",     "size": 0.004},
     "BTCUSD":     {"epic": "BTCUSD",     "size": 0.004}
 }
@@ -240,4 +240,5 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 UNEXPECTED SERVER ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
