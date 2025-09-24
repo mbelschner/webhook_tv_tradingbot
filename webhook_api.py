@@ -25,7 +25,7 @@ SYMBOL_EPIC_MAP = {
     "LRC":        {"epic": "LRC",        "size": 0.2},
     "NATURALGAS": {"epic": "NATURALGAS", "size": 400},
     "TSLA":       {"epic": "TSLA",       "size": 3.4},
-    "MSFT":       {"epic": "MSFT",       "size": 3.0}
+    "USDJPY":     {"epic": "USDJYP",     "size": 7000}
 }
 
 IDEMP_STORE = "processed_signals.json"
@@ -240,6 +240,7 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 UNEXPECTED SERVER ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
