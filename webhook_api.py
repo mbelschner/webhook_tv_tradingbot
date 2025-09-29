@@ -15,8 +15,6 @@ CST = None
 XST = None
 
 SYMBOL_EPIC_MAP = {
-    "ETHUSD":     {"epic": "ETHUSD",     "size": 0.12},
-    "DOGEUSD":    {"epic": "DOGEUSD",    "size": 2200},
     "GOLD":       {"epic": "GOLD",       "size": 1.6},
     "SILVER":     {"epic": "SILVER",     "size": 70},
     "COPPER":     {"epic": "COPPER",     "size": 550},
@@ -25,7 +23,11 @@ SYMBOL_EPIC_MAP = {
     "LRC":        {"epic": "LRC",        "size": 0.2},
     "NATURALGAS": {"epic": "NATURALGAS", "size": 400},
     "TSLA":       {"epic": "TSLA",       "size": 3.4},
-    "USDJPY":     {"epic": "USDJPY",     "size": 7000}
+    "USDJPY":     {"epic": "USDJPY",     "size": 8000},
+    "EURNZD":     {"epic": "EURNZD",     "size": 7000},
+    "GBPUSD":     {"epic": "GBPUSD",     "size": 7000},
+    "COFFEEARABICA": {"epic": "COFFEEARABICA", "size": 400},
+    "OIL_BRENT":  {"epic": "OIL_BRENT", "size": 40}
 }
 
 IDEMP_STORE = "processed_signals.json"
@@ -240,6 +242,7 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 UNEXPECTED SERVER ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
