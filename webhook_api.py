@@ -16,7 +16,7 @@ XST = None
 
 SYMBOL_EPIC_MAP = {
     "GOLD":       {"epic": "GOLD",       "size": 1.2},
-    "SILVER":     {"epic": "SILVER",     "size": 60},
+    "SILVER":     {"epic": "SILVER",     "size": 44},
     "COPPER":     {"epic": "COPPER",     "size": 550},
     "OIL_CRUDE":  {"epic": "OIL_CRUDE",  "size": 44},
     "EURUSD":     {"epic": "EURUSD",     "size": 7000},
@@ -242,6 +242,7 @@ async def handle_webhook(request: Request):
     except Exception as e:
         log(f"🔥 UNEXPECTED SERVER ERROR: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
